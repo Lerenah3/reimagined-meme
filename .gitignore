@@ -1,3 +1,232 @@
+// Copyright 2013 The Flutter Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+package io.flutter.embedding.android;
+
+import android.app.Activity;
+import android.content.Context;
+import android.content.Intent;
+import android.os.Build;
+import android.os.Bundle;
+import android.view.LayoutInflater;
+import android.view.View;
+import android.view.ViewGroup;
+import android.view.Window;
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+import androidx.annotation.VisibleForTesting;
+import androidx.lifecycle.Lifecycle;
+import io.flutter.FlutterInjector;
+import io.flutter.Log;
+import io.flutter.embedding.engine.FlutterEngine;
+import io.flutter.embedding.engine.FlutterEngineConfigurator;
+import io.flutter.embedding.engine.FlutterEngineGroup;
+import io.flutter.embedding.engine.FlutterEngineProvider;
+import io.flutter.embedding.engine.FlutterShellArgs;
+import io.flutter.embedding.engine.plugins.util.GeneratedPluginRegister;
+import io.flutter.plugin.platform.PlatformPlugin;
+import io.flutter.view.FlutterMain;
+import java.util.List;
+
+/**
+ * A delegate that implements all Flutter activity and fragment behaviors.
+ *
+ * <p>Flutter activities and fragments should delegate calls to {@link
+ * FlutterActivityAndFragmentDelegate} to implement the desired behaviors.
+ *
+ * <p>The delegate manages the {@link FlutterEngine} lifecycle and notifies the client when the
+ * engine is created or destroyed. The delegate also notifies the client when the {@link
+ * FlutterView} is created or destroyed.
+ *
+ * <p>The delegate also handles the creation of the {@link PlatformPlugin} and the {@link
+ * SplashScreen}.
+ */
+public class FlutterActivityAndFragmentDelegate implements FlutterEngineProvider {
+  private static final String TAG = "FlutterActivityAndFragmentDelegate";
+
+  /**
+   * The {@link FlutterEngine} managed by this delegate.
+   *
+   * <p>This engine is created in {@link #onCreateView(LayoutInflater, ViewGroup, Bundle)} and
+   * destroyed in {@link #onDestroyView()}.
+   */
+  @Nullable private FlutterEngine flutterEngine;
+
+  /** The {@link FlutterView} managed by this delegate. */
+  @Nullable private FlutterView flutterView;
+
+  /** The {@link PlatformPlugin} managed by this delegate. */
+  @Nullable private PlatformPlugin platformPlugin;
+
+  /** The {@link SplashScreen} managed by this delegate. */
+  @Nullable private SplashScreen splashScreen;
+
+  /** The {@link FlutterEngineConfigurator} managed by this delegate. */
+  @Nullable private FlutterEngineConfigurator flutterEngineConfigurator;
+
+  /** The {@link Host} managed by this delegate. */
+  @NonNull private final Host host;
+
+  /**
+   * Constructs a {@link FlutterActivityAndFragmentDelegate} that is managed by the given {@link
+   * Host}.
+   */
+  public FlutterActivityAndFragmentDelegate(@NonNull Host host) {
+    this.host = host;
+  }
+
+  /**
+   * Returns the {@link FlutterEngine} managed by this delegate.
+   *
+   * <p>This method is called by the {@link Host} to retrieve the engine.
+   */
+  @Nullable
+  @Override
+  public FlutterEngine getFlutterEngine() {
+    return flutterEngine;
+  }
+
+  /**
+   * Returns the {@link FlutterView} managed by this delegate.
+   *
+   * <p>This method is called by the {@link Host} to retrieve the view.
+   */
+  @Nullable
+  public FlutterView getFlutterView() {
+    return flutterView;
+  }
+
+  /**
+   * Returns the {@link PlatformPlugin} managed by this delegate.
+   *
+   * <p>This method is called by the {@link Host} to retrieve the platform plugin.
+   */
+  @Nullable
+  public PlatformPlugin getPlatformPlugin() {
+    return platformPlugin;
+  }
+
+  /**
+   * Returns the {@link SplashScreen} managed by this delegate.
+   *
+   * <p>This method is called by the {@link Host} to retrieve the splash screen.
+   */
+  @Nullable
+  public SplashScreen getSplashScreen() {
+    return splashScreen;
+  }
+
+  /**
+   * Returns the {@link FlutterEngineConfigurator} managed by this delegate.
+   *
+   * <p>This method is called by the {@link Host} to retrieve the engine configurator.
+   */
+  @Nullable
+  public FlutterEngineConfigurator getFlutterEngineConfigurator() {
+    return flutterEngineConfigurator;
+  }
+
+  /**
+   * Returns the {@link Host} managed by this delegate.
+   *
+   * <p>This method is called by the {@link Host} to retrieve the host.
+   */
+  @NonNull
+  public Host getHost() {
+    return host;
+  }
+
+  /**
+   * Called by the {@link Host} when the {@link Host} is created.
+   *
+   * <p>This method should be called by the {@link Host} in {@link Activity#onCreate(Bundle)} or
+   * {@link androidx.fragment.app.Fragment#onCreate(Bundle)}.
+   */
+  public void onCreate(@Nullable Bundle savedInstanceState) {
+    // Initialize FlutterMain here, so that plugins can call FlutterMain.getLookupKeyForAsset()
+    // while initializing.
+    if (host.shouldAttachEngineToActivity()) {
+      FlutterMain.startInitialization(getHost().getContext());
+    }
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+      final Activity activity = host.getActivity();
+      if (activity != null) {
+        final Window window = activity.getWindow();
+        if (window != null) {
+          // The intent is to set the status bar color of the initial activity to match the toolbar color
+          // of the Flutter app.
+          window.addFlags(android.view.WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
+          window.setStatusBarColor(0x40000000);
+          window.setSystemUiVisibility(AndroidSystemUiVisibility.IMMERSIVE_STICKY);
+        }
+      }
+    }
+
+    if (host.getCachedEngineId() != null) {
+      // Do not configure the engine if it is cached. The engine will be configured when it is
+      // attached to the activity.
+      return;
+    }
+
+    flutterEngine = host.provideFlutterEngine(host.getContext());
+    if (flutterEngine != null) {
+      flutterEngineConfigurator = host.provideFlutterEngineConfigurator();
+      if (flutterEngineConfigurator != null) {
+        flutterEngineConfigurator.configureFlutterEngine(flutterEngine);
+      }
+      if (host.shouldAutomaticallyRegisterPlugins()) {
+        GeneratedPluginRegister.registerGeneratedPlugins(flutterEngine);
+      }
+    }
+  }
+
+  /**
+   * Called by the {@link Host} when the {@link Host} is about to create its view.
+   *
+   * <p>This method should be called by the {@link Host} in {@link
+   * androidx.fragment.app.Fragment#onCreateView(LayoutInflater, ViewGroup, Bundle)}.
+   *
+   * @return the view to be displayed by the {@link Host}.
+   */
+  @Nullable
+  public View onCreateView(
+      @NonNull LayoutInflater inflater, @Nullable ViewGroup container, @Nullable Bundle savedInstanceState) {
+    if (flutterEngine == null) {
+      // If the engine is null, then the host is being created for the first time.
+      // In this case, we should create the engine and configure it.
+      String cachedEngineId = host.getCachedEngineId();
+      if (cachedEngineId != null) {
+        // If the host has a cached engine id, then we should try to retrieve the engine from the
+        // engine group.
+        FlutterEngineGroup engineGroup = FlutterInjector.instance().flutterEngineGroup();
+        flutterEngine = engineGroup.createAndRunEngine(host.getContext());
+      } else {
+        // If the host does not have a cached engine id, then we should create a new engine.
+        flutterEngine = host.provideFlutterEngine(host.getContext());
+      }
+
+      if (flutterEngine == null) {
+        return null;
+      }
+
+      flutterEngineConfigurator = host.provideFlutterEngineConfigurator();
+      if (flutterEngineConfigurator != null) {
+        flutterEngineConfigurator.configureFlutterEngine(flutterEngine);
+      }
+      if (host.shouldAutomaticallyRegisterPlugins()) {
+        GeneratedPluginRegister.registerGeneratedPlugins(flutterEngine);
+      }
+    }
+
+    flutterView = new FlutterView(host.getContext(), host.getRenderMode(), host.getTransparencyMode());
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
+      flutterView.enableTransparentBackground();
+    }
+    flutterView.attachToFlutterEngine(flutterEngine);
+
+    platformPlugin =
+
 # Gradle files
 .gradle/
 build/
